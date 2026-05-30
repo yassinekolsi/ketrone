@@ -2,13 +2,15 @@
 
 ## Executive Summary
 
-This project builds an end-to-end GraphRAG pipeline for Omani legal documents from qanoon.om, with English translations from decree.om when they are linked from the Arabic source page. The implementation favors deterministic extraction over unnecessary LLM calls. The crawler uses WordPress REST endpoints when available, stores resumable state in SQLite, serializes content to Markdown, loads consolidated multilingual `Document` nodes into Neo4j, extracts topics, creates semantic chunks, embeds topics and chunks, and exposes a hybrid search client.
+This project builds an end-to-end GraphRAG pipeline for Omani legal documents from qanoon.om, with English translations from decree.om when they are linked from the Arabic source page. The implementation favors deterministic extraction over unnecessary LLM calls. The crawler uses WordPress REST endpoints when available, stores resumable state in SQLite, serializes content to Markdown, loads consolidated multilingual `Document` nodes into Neo4j, extracts topics, creates semantic chunks, embeds topics and chunks, and exposes a hybrid search client with both local JSONL and live Neo4j backends.
 
 The implementation is designed to be practical and reproducible: complete enough to run end to end, but intentionally avoids overbuilding speculative infrastructure. The strongest engineering choices are the REST-first crawl gate, exact parsing of site-provided metadata, deterministic legal edge extraction, and a runnable sample dataset.
 
 ## Crawling And Serialization
 
 The first command checks `qanoon.om/wp-json/wp/v2/posts?per_page=1` and `decree.om/wp-json/wp/v2/posts?per_page=1`. If both return JSON objects with `id`, the crawler uses WordPress REST pagination. If either endpoint fails, sitemap fallback is available. This avoids expensive browser automation for the normal case while still preserving a recovery route.
+
+The crawler includes practical robustness controls: rotating user agents, randomized pacing, retries with exponential backoff, `Retry-After` handling, optional proxy configuration, and persistent cookie storage. An optional Playwright detail-page fallback is available when direct HTTP fetches fail, but the primary path remains the public REST API. The implementation does not claim CAPTCHA solving, TLS fingerprint spoofing, or proxy-pool evasion.
 
 Qanoon remains the source of truth. The crawler does not derive decree.om URLs from qanoon slugs because the live site has inconsistent zero padding and different patterns for non-royal-decree documents. Instead, it extracts the embedded English link directly from each Arabic post and follows that exact URL.
 
@@ -37,10 +39,10 @@ The LLM is constrained to topic extraction and optional final answer synthesis. 
 
 The default embedding model is `intfloat/multilingual-e5-small`, chosen because Arabic coverage matters more here than marginal English-only gains. Chunks are formed around Markdown headings and then windowed to roughly 500-900 tokens with overlap.
 
-The search client implements three retrieval stages:
+The search client implements three retrieval stages in both local and Neo4j-backed modes:
 
-1. Candidate generation with dense vector scores and BM25 keyword scores. The default dense weight is `0.35` because the current legal sanity checks showed exact sparse matches are more reliable for title-heavy ministerial decisions than uncalibrated dense scores.
-2. Graph expansion by appending parent document metadata, linked topics, and legal references.
+1. Candidate generation with dense vector scores and sparse keyword/full-text scores. The default dense weight is `0.35` because the current legal sanity checks showed exact sparse matches are more reliable for title-heavy ministerial decisions than uncalibrated dense scores.
+2. Graph expansion by appending parent document metadata, linked topics, and legal references. In Neo4j mode this expansion is performed with live Cypher traversals from retrieved `Chunk` nodes to their parent `Document`, `Topic`, and legal-reference relationships.
 3. Optional cross-encoder reranking with `BAAI/bge-reranker-base`.
 
 Final synthesis uses Gemini when `GOOGLE_API_KEY` is configured, with an OpenAI-compatible fallback also available. Without an LLM key, the client returns an extractive answer with source titles and snippets.
@@ -49,7 +51,7 @@ Final synthesis uses Gemini when `GOOGLE_API_KEY` is configured, with an OpenAI-
 
 Topic merging is implemented as a vector-similarity audit with a default threshold of `0.88`. The threshold is intentionally conservative: it catches close synonyms while reducing the risk of merging adjacent but legally distinct concepts.
 
-Community detection is included as exploratory analysis via Louvain over the document-topic-reference graph. It is not treated as the main quality claim because sparse legal citation graphs can cluster by issuer, time, or publication pattern instead of substantive legal field.
+Community detection is included as exploratory analysis via Louvain over the document-topic-reference graph. Each community can be summarized by the configured LLM using its topic labels and representative document titles. It is not treated as the main quality claim because sparse legal citation graphs can cluster by issuer, time, or publication pattern instead of substantive legal field.
 
 Cross-encoder reranking is optional. It can improve precision, but it is slower than bi-encoder retrieval. The intended production optimization path would be async candidate generation, cached graph expansion, batched reranker inference, and quantized reranker weights.
 

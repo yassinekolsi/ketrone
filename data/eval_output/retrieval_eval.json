@@ -50,10 +50,10 @@
         "rd2026059",
         "rd2026039",
         "rd2026060",
-        "rd2026052",
         "mol20260127",
         "mosd20260154",
         "mosd20260187",
+        "rd2026052",
         "rd2026050",
         "rd2026045",
         "rd2026044",
@@ -64,7 +64,7 @@
       "hit_at_1": true,
       "hit_at_3": true,
       "reciprocal_rank": 1.0,
-      "top_score": 0.983981260346027,
+      "top_score": 1.0,
       "notes": "Should retrieve Royal Decree 59/2026 issuing the Sports Entities Law."
     },
     {
@@ -78,6 +78,7 @@
         "rd2026056",
         "rd2026039",
         "rd2026052",
+        "mhup20260036",
         "rd2026044",
         "rd2026059",
         "rd2026060",
@@ -85,20 +86,19 @@
         "rd2026043",
         "rd2026051",
         "rd2026053",
+        "moht20269901",
         "rd2026054",
         "rd2026037",
         "rd2026047",
         "rd2026040",
         "rd2026050",
         "rd2026035",
-        "rd2026048",
-        "rd2026041",
-        "rd2026046"
+        "rd2026048"
       ],
       "hit_at_1": true,
       "hit_at_3": true,
       "reciprocal_rank": 1.0,
-      "top_score": 0.9835954772299502,
+      "top_score": 1.0,
       "notes": "Should retrieve Royal Decree 58/2026."
     },
     {
@@ -112,6 +112,8 @@
         "rd2026044",
         "rd2026052",
         "rd2026059",
+        "apsr20260035",
+        "apsr20260034",
         "rd2026042",
         "rd2026039",
         "rd2026060",
@@ -124,9 +126,7 @@
         "rd2026043",
         "rd2026049",
         "rd2026045",
-        "rd2026041",
-        "rd2026053",
-        "rd2026051"
+        "rd2026041"
       ],
       "hit_at_1": true,
       "hit_at_3": true,
@@ -161,7 +161,7 @@
       "hit_at_1": true,
       "hit_at_3": true,
       "reciprocal_rank": 1.0,
-      "top_score": 0.8300867295442829,
+      "top_score": 1.0,
       "notes": "Should retrieve Ministerial Decision 50/2026."
     },
     {
@@ -194,7 +194,7 @@
       "hit_at_1": true,
       "hit_at_3": true,
       "reciprocal_rank": 1.0,
-      "top_score": 0.8243962120115129,
+      "top_score": 1.0,
       "notes": "Should retrieve Ministerial Decision 104/2026."
     },
     {
@@ -203,8 +203,8 @@
       "expected_document_ids": [],
       "retrieved_document_ids": [
         "rd2026046",
-        "rd2026039",
         "rd2026052",
+        "rd2026039",
         "rd2026037",
         "rd2026044",
         "rd2026049",
@@ -220,13 +220,12 @@
         "rd2026060",
         "rd2026056",
         "rd2026055",
-        "rd2026042",
-        "rd2026048"
+        "rd2026042"
       ],
       "hit_at_1": false,
       "hit_at_3": false,
       "reciprocal_rank": 0.0,
-      "top_score": 0.905685497455404,
+      "top_score": 1.0,
       "notes": "Negative-control query. A healthy system should report no known expected document."
     }
   ]

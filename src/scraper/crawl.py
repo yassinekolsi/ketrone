@@ -49,10 +49,12 @@ USER_AGENTS = [
 
 
 class QanoonCrawler:
-    def __init__(self, *, state_path: Path = STATE_DB, output_dir: Path = RAW_DIR):
+    def __init__(self, *, state_path: Path = STATE_DB, output_dir: Path = RAW_DIR, browser_fallback: bool = False):
         ensure_directories()
         self.state = CrawlState(state_path)
         self.output_dir = output_dir
+        self.browser_fallback = browser_fallback
+        self.cookie_jar_path = Path(settings.crawler_cookie_jar) if settings.crawler_cookie_jar else None
         self.markdown_dir = output_dir / "markdown"
         self.markdown_dir.mkdir(parents=True, exist_ok=True)
         self.documents_path = output_dir / "documents.jsonl"
@@ -61,11 +63,48 @@ class QanoonCrawler:
             "Accept": "application/json,text/html,application/xhtml+xml",
             "Accept-Language": "ar,en;q=0.9",
         }
-        self.client = httpx.Client(headers=self.headers, timeout=settings.request_timeout, follow_redirects=True)
+        self.client = httpx.Client(
+            headers=self.headers,
+            timeout=settings.request_timeout,
+            follow_redirects=True,
+            proxy=settings.crawler_proxy_url,
+        )
+        self._load_cookies()
 
     def close(self) -> None:
+        self._save_cookies()
         self.client.close()
         self.state.close()
+
+    def _load_cookies(self) -> None:
+        if not self.cookie_jar_path or not self.cookie_jar_path.exists():
+            return
+        try:
+            cookies = json.loads(self.cookie_jar_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return
+        for cookie in cookies:
+            self.client.cookies.set(
+                cookie["name"],
+                cookie["value"],
+                domain=cookie.get("domain"),
+                path=cookie.get("path", "/"),
+            )
+
+    def _save_cookies(self) -> None:
+        if not self.cookie_jar_path:
+            return
+        self.cookie_jar_path.parent.mkdir(parents=True, exist_ok=True)
+        cookies = [
+            {
+                "name": cookie.name,
+                "value": cookie.value,
+                "domain": cookie.domain,
+                "path": cookie.path,
+            }
+            for cookie in self.client.cookies.jar
+        ]
+        self.cookie_jar_path.write_text(json.dumps(cookies, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def pace(self) -> None:
         time.sleep(random.uniform(settings.min_delay_seconds, settings.max_delay_seconds))
@@ -82,8 +121,43 @@ class QanoonCrawler:
         if kwargs.get("headers"):
             request_headers.update(kwargs.pop("headers"))
         response = self.client.get(url, headers=request_headers, **kwargs)
+        if response.status_code in {429, 503} and response.headers.get("Retry-After"):
+            try:
+                time.sleep(min(int(response.headers["Retry-After"]), 60))
+            except ValueError:
+                pass
         response.raise_for_status()
         return response
+
+    def fetch_html(self, url: str) -> str:
+        try:
+            return self.get(url, headers={**self.headers, "Accept": "text/html"}).text
+        except Exception:
+            if not self.browser_fallback:
+                raise
+            return self.fetch_html_with_browser(url)
+
+    def fetch_html_with_browser(self, url: str) -> str:
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise RuntimeError("Playwright fallback requested but playwright is not installed") from exc
+
+        with sync_playwright() as playwright:
+            launch_args: dict[str, Any] = {"headless": True}
+            if settings.crawler_proxy_url:
+                launch_args["proxy"] = {"server": settings.crawler_proxy_url}
+            browser = playwright.chromium.launch(**launch_args)
+            context = browser.new_context(
+                user_agent=random.choice(USER_AGENTS),
+                locale="ar-OM",
+                extra_http_headers={"Accept-Language": "ar,en;q=0.9"},
+            )
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=int(settings.request_timeout * 1000))
+            html_text = page.content()
+            browser.close()
+            return html_text
 
     def rest_posts(self, *, limit: int | None = None) -> Iterable[dict[str, Any]]:
         yielded = 0
@@ -184,8 +258,7 @@ class QanoonCrawler:
     def _fetch_english(self, english_url: str | None) -> tuple[str | None, str | None, str | None]:
         if not english_url:
             return None, None, None
-        response = self.get(english_url, headers={**self.headers, "Accept": "text/html"})
-        detail_html = response.text
+        detail_html = self.fetch_html(english_url)
         title = extract_page_title(detail_html)
         article_html = extract_article_html(detail_html)
         pdf_urls = extract_pdf_urls(article_html)
@@ -212,7 +285,7 @@ class QanoonCrawler:
             self.state.mark_status(slug, "skipped_gazette")
             return None
 
-        detail_html = self.get(post["link"], headers={**self.headers, "Accept": "text/html"}).text
+        detail_html = self.fetch_html(post["link"])
         number = extract_number_from_detail_page(detail_html)
         pdf_urls = extract_pdf_urls(content_html)
         pdf_url_ar = pdf_urls[0] if pdf_urls else None
@@ -295,8 +368,9 @@ def crawl(
     state_path: Path = typer.Option(STATE_DB, help="SQLite checkpoint path."),
     force_sitemap: bool = typer.Option(False, help="Force sitemap/HTML fallback discovery."),
     pdf_fallback: bool = typer.Option(False, help="Download PDFs when HTML content is too short."),
+    browser_fallback: bool = typer.Option(False, help="Use optional Playwright fallback if direct detail-page fetch fails."),
 ) -> None:
-    crawler = QanoonCrawler(state_path=state_path, output_dir=output_dir)
+    crawler = QanoonCrawler(state_path=state_path, output_dir=output_dir, browser_fallback=browser_fallback)
     try:
         count = crawler.crawl(limit=limit, sample=sample, force_sitemap=force_sitemap, pdf_fallback=pdf_fallback)
     finally:

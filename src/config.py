@@ -36,6 +36,8 @@ class Settings:
         "Mozilla/5.0 (compatible; OmanLegalGraphRAG/1.0; "
         "+https://github.com/example/legal-graphrag-pipeline)"
     )
+    crawler_proxy_url: str | None = os.getenv("CRAWLER_PROXY_URL") or None
+    crawler_cookie_jar: str | None = os.getenv("CRAWLER_COOKIE_JAR") or None
     request_timeout: float = 30.0
     per_page: int = 100
     min_delay_seconds: float = 0.8

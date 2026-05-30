@@ -1,0 +1,8 @@
+.env
+for_me/
+__pycache__/
+.pytest_cache/
+data/raw/
+data/crawl_state.sqlite3
+data/eval_state.sqlite3
+data/crawler_cookies.json

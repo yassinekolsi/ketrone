@@ -12,6 +12,7 @@ data/crawl_state.sqlite3
 data/crawl_state.sqlite3-*
 data/eval_state.sqlite3
 data/eval_state.sqlite3-*
+data/crawler_cookies.json
 
 for_me/
 

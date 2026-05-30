@@ -36,6 +36,11 @@ python -m src.vector_ops.embed --chunks-path data\sample_output\chunks.jsonl --t
 python src\search_client.py --query "What decrees govern health specialties?" --data-dir data\sample_output --top-k 10 --top-n 3
 ```
 
+The search client supports two backends:
+
+- `--backend local` reads the JSONL artifacts from disk for quick offline demos.
+- `--backend neo4j` queries Neo4j full-text/vector indexes and expands context through live graph relationships.
+
 ## Evaluation Pipeline
 
 The six-document sample proves the plumbing, not retrieval quality. For a broader retrieval check, run a larger crawl and the labeled evaluation harness:
@@ -59,6 +64,8 @@ python -m src.scraper.crawl crawl
 
 The crawler uses SQLite checkpointing at `data/crawl_state.sqlite3`, randomized pacing, retries with exponential backoff, and resumable WordPress REST pagination.
 
+Optional crawler controls are available through `.env`: `CRAWLER_PROXY_URL` for proxy routing and `CRAWLER_COOKIE_JAR` for cookie persistence. The `--browser-fallback` flag can use Playwright for detail-page HTML fallback if Playwright is installed locally.
+
 ## Graph Loading
 
 Start Neo4j:
@@ -74,6 +81,12 @@ python -m src.llm_agents.chunking
 python -m src.llm_agents.topic_extractor
 python -m src.vector_ops.embed
 python -m src.ingestion.load_graph
+```
+
+Run a live Neo4j-backed search:
+
+```powershell
+python src\search_client.py --backend neo4j --query "Which decree abolished the Higher Institute of Health Specialties?" --top-k 10 --top-n 3
 ```
 
 Neo4j defaults:
@@ -106,7 +119,8 @@ When these variables are set, topic extraction and final synthesis use Gemini. I
 - Issuer metadata: ministerial issuer codes are parsed from `data.qanoon.om/ar/md/{issuer}/...` PDF paths.
 - Cross-reference edges: `REFERENCES`, `REPEALS`, and `AMENDS` come from inline links plus Arabic legal keywords.
 - Multilingual embeddings: default model is `intfloat/multilingual-e5-small`, with a deterministic hash fallback if model dependencies are unavailable.
-- Bonus scripts: topic merge audit, optional cross-encoder rerank, and exploratory Louvain community detection.
+- Search backends: local JSONL retrieval for portable demos and live Neo4j retrieval for graph/vector/full-text queries.
+- Bonus scripts: topic merge audit, optional cross-encoder rerank, and Louvain community detection with LLM-generated community summaries.
 
 ## Key Commands
 
@@ -117,7 +131,7 @@ python -m src.llm_agents.chunking --input-path data\sample_output\documents.json
 python -m src.llm_agents.topic_extractor --input-path data\sample_output\documents.jsonl --output-path data\sample_output\topics.jsonl
 python -m src.vector_ops.embed --chunks-path data\sample_output\chunks.jsonl --topics-path data\sample_output\topics.jsonl --output-dir data\sample_output
 python -m src.vector_ops.merge_topics --topics-path data\sample_output\topics.embedded.jsonl --threshold 0.88
-python -m src.vector_ops.community --documents-path data\sample_output\documents.jsonl --topics-path data\sample_output\topics.jsonl --output-path data\sample_output\communities.jsonl
+python -m src.vector_ops.community --documents-path data\sample_output\documents.jsonl --topics-path data\sample_output\topics.jsonl --output-path data\sample_output\communities.jsonl --summaries-path data\sample_output\community_summaries.jsonl
 python -m src.evaluation.evaluate_retrieval --data-dir data\sample_output --output-path data\sample_output\retrieval_eval.json
 python src\search_client.py --query "What laws regulate sports entities?" --data-dir data\sample_output
 ```
