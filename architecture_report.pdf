@@ -9,7 +9,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
 endobj
 4 0 obj
-<< /Length 3855 >>
+<< /Length 3991 >>
 stream
 BT /F1 10 Tf 50 760 Td 12 TL
 ( Architecture Report: Oman Legal GraphRAG Pipeline) Tj T*
@@ -37,11 +37,12 @@ BT /F1 10 Tf 50 760 Td 12 TL
 (expensive browser automation for the normal case while still preserving a recovery route.) Tj T*
 () Tj T*
 (The crawler includes practical robustness controls: rotating user agents, randomized pacing,) Tj T*
-(retries with exponential backoff, Retry-After handling, optional proxy configuration, and) Tj T*
-(persistent cookie storage. An optional Playwright detail-page fallback is available when) Tj T*
-(direct HTTP fetches fail, but the primary path remains the public REST API. The) Tj T*
-(implementation does not claim CAPTCHA solving, TLS fingerprint spoofing, or proxy-pool) Tj T*
-(evasion.) Tj T*
+(retries with exponential backoff, Retry-After handling, optional proxy configuration,) Tj T*
+(persistent cookie storage, and SQLite replay of pending/failed slugs before new discovery) Tj T*
+(work. A document is marked complete only after its JSONL and Markdown artifacts are written.) Tj T*
+(An optional Playwright detail-page fallback is available when direct HTTP fetches fail, but) Tj T*
+(the primary path remains the public REST API. The implementation does not claim CAPTCHA) Tj T*
+(solving, TLS fingerprint spoofing, or proxy-pool evasion.) Tj T*
 () Tj T*
 (Qanoon remains the source of truth. The crawler does not derive decree.om URLs from qanoon) Tj T*
 (slugs because the live site has inconsistent zero padding and different patterns for non-) Tj T*
@@ -69,7 +70,6 @@ BT /F1 10 Tf 50 760 Td 12 TL
 (Primary document numbers are parsed from the specific paragraph immediately below h1.entry-) Tj T*
 (title, which contains all four formats such as 2026/60 60/2026 ????/?? ??/????. The parser) Tj T*
 (does not scan the body for primary numbers, because legal body text contains many referenced) Tj T*
-(decree numbers.) Tj T*
 ET
 endstream
 endobj
@@ -77,9 +77,10 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>
 endobj
 6 0 obj
-<< /Length 3676 >>
+<< /Length 3612 >>
 stream
 BT /F1 10 Tf 50 760 Td 12 TL
+(decree numbers.) Tj T*
 () Tj T*
 (Issuer metadata for ministerial decisions is parsed from PDF URLs like) Tj T*
 (data.qanoon.om/ar/md/{issuer}/2026-0074.pdf. This is more reliable than asking an LLM to) Tj T*
@@ -124,7 +125,8 @@ BT /F1 10 Tf 50 760 Td 12 TL
 () Tj T*
 (Community detection is included as exploratory analysis via Louvain over the document-topic-) Tj T*
 (reference graph. Each community can be summarized by the configured LLM using its topic) Tj T*
-(labels and representative document titles. It is not treated as the main quality claim) Tj T*
+(labels and representative document titles, and the graph loader can persist communityId and) Tj T*
+(communitySummary onto Document and Topic nodes. It is not treated as the main quality claim) Tj T*
 (because sparse legal citation graphs can cluster by issuer, time, or publication pattern) Tj T*
 (instead of substantive legal field.) Tj T*
 () Tj T*
@@ -136,8 +138,6 @@ BT /F1 10 Tf 50 760 Td 12 TL
 ( Retrieval Evaluation) Tj T*
 () Tj T*
 (The six-document sample is only a smoke test. To avoid overstating quality, a separate) Tj T*
-(evaluation harness runs labeled known-answer queries and reports Hit@1, Hit@3, and Mean) Tj T*
-(Reciprocal Rank. A broader local run inspected 80 live Qanoon posts and produced 67 full) Tj T*
 ET
 endstream
 endobj
@@ -145,9 +145,11 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 8 0 R >>
 endobj
 8 0 obj
-<< /Length 3221 >>
+<< /Length 3577 >>
 stream
 BT /F1 10 Tf 50 760 Td 12 TL
+(evaluation harness runs labeled known-answer queries and reports Hit@1, Hit@3, and Mean) Tj T*
+(Reciprocal Rank. A broader local run inspected 80 live Qanoon posts and produced 67 full) Tj T*
 (documents after skipping official-gazette index pages. The set contained 24 royal decrees) Tj T*
 (and 43 ministerial decisions, with 247 chunks, 171 topic links, and 271 extracted cross-) Tj T*
 (reference mentions.) Tj T*
@@ -175,8 +177,10 @@ BT /F1 10 Tf 50 760 Td 12 TL
 (The main bottlenecks are crawl time under polite rate limits, Arabic PDF extraction quality,) Tj T*
 (LLM topic extraction cost, embedding throughput, and Neo4j write volume. At larger scale,) Tj T*
 (ingestion should split into independent queues: discovery, fetch, parse, graph upsert, topic) Tj T*
-(extraction, chunking, and embedding. Neo4j writes should be batched, and embeddings should) Tj T*
-(run on GPU workers or a managed embedding service.) Tj T*
+(extraction, chunking, and embedding. The current loader batches documents, chunks, topics,) Tj T*
+(legal references, and community assignments; at larger scale those batches should be queue-) Tj T*
+(driven with retryable write jobs. Embeddings should run on GPU workers or a managed) Tj T*
+(embedding service.) Tj T*
 () Tj T*
 (The system deliberately avoids CAPTCHA bypass. If throttling or CAPTCHA appears, the crawler) Tj T*
 (checkpoints progress, records the failing URL, and pauses for later resume.) Tj T*
@@ -184,10 +188,10 @@ BT /F1 10 Tf 50 760 Td 12 TL
 ( Verification) Tj T*
 () Tj T*
 (The repository includes offline tests for exact number parsing, English-link extraction,) Tj T*
-(gazette skipping, PDF issuer parsing, Markdown cleanup, chunking, fallback topic detection,) Tj T*
-(and legal edge classification. These tests are useful but intentionally narrow; they do not) Tj T*
-(prove full crawl resumability, Arabic PDF quality, cross-encoder quality, embedding quality,) Tj T*
-(or end-to-end Neo4j correctness under all failure modes.) Tj T*
+(gazette skipping, PDF issuer parsing, Markdown cleanup, chunking, crawl-state resume) Tj T*
+(records, fallback topic detection, and legal edge classification. These tests are useful but) Tj T*
+(intentionally narrow; they do not prove Arabic PDF quality, cross-encoder quality, embedding) Tj T*
+(quality, or end-to-end Neo4j correctness under all failure modes.) Tj T*
 () Tj T*
 (Live checks performed during development covered the WordPress REST probe, Gemini smoke) Tj T*
 (completion, Neo4j Aura connectivity, schema/index creation, sample graph loading,) Tj T*
@@ -207,13 +211,13 @@ xref
 0000000058 00000 n 
 0000000127 00000 n 
 0000000253 00000 n 
-0000004160 00000 n 
-0000004286 00000 n 
-0000008014 00000 n 
-0000008140 00000 n 
-0000011413 00000 n 
+0000004296 00000 n 
+0000004422 00000 n 
+0000008086 00000 n 
+0000008212 00000 n 
+0000011841 00000 n 
 trailer
 << /Size 10 /Root 1 0 R >>
 startxref
-11483
+11911
 %%EOF

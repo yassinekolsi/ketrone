@@ -14,6 +14,11 @@ def test_extract_english_link_follows_embedded_decree_url() -> None:
     assert extract_english_link(html) == "https://decree.om/2026/rd20260057/"
 
 
+def test_extract_english_link_accepts_decree_hostname_without_label() -> None:
+    html = '<p><a href="https://decree.om/2026/rd20260057/">ترجمة</a></p>'
+    assert extract_english_link(html) == "https://decree.om/2026/rd20260057/"
+
+
 def test_gazette_slug_detection() -> None:
     assert is_gazette_slug("og1649")
     assert not is_gazette_slug("rd2026060")

@@ -10,7 +10,7 @@ The implementation is designed to be practical and reproducible: complete enough
 
 The first command checks `qanoon.om/wp-json/wp/v2/posts?per_page=1` and `decree.om/wp-json/wp/v2/posts?per_page=1`. If both return JSON objects with `id`, the crawler uses WordPress REST pagination. If either endpoint fails, sitemap fallback is available. This avoids expensive browser automation for the normal case while still preserving a recovery route.
 
-The crawler includes practical robustness controls: rotating user agents, randomized pacing, retries with exponential backoff, `Retry-After` handling, optional proxy configuration, and persistent cookie storage. An optional Playwright detail-page fallback is available when direct HTTP fetches fail, but the primary path remains the public REST API. The implementation does not claim CAPTCHA solving, TLS fingerprint spoofing, or proxy-pool evasion.
+The crawler includes practical robustness controls: rotating user agents, randomized pacing, retries with exponential backoff, `Retry-After` handling, optional proxy configuration, persistent cookie storage, and SQLite replay of pending/failed slugs before new discovery work. A document is marked complete only after its JSONL and Markdown artifacts are written. An optional Playwright detail-page fallback is available when direct HTTP fetches fail, but the primary path remains the public REST API. The implementation does not claim CAPTCHA solving, TLS fingerprint spoofing, or proxy-pool evasion.
 
 Qanoon remains the source of truth. The crawler does not derive decree.om URLs from qanoon slugs because the live site has inconsistent zero padding and different patterns for non-royal-decree documents. Instead, it extracts the embedded English link directly from each Arabic post and follows that exact URL.
 
@@ -51,7 +51,7 @@ Final synthesis uses Gemini when `GOOGLE_API_KEY` is configured, with an OpenAI-
 
 Topic merging is implemented as a vector-similarity audit with a default threshold of `0.88`. The threshold is intentionally conservative: it catches close synonyms while reducing the risk of merging adjacent but legally distinct concepts.
 
-Community detection is included as exploratory analysis via Louvain over the document-topic-reference graph. Each community can be summarized by the configured LLM using its topic labels and representative document titles. It is not treated as the main quality claim because sparse legal citation graphs can cluster by issuer, time, or publication pattern instead of substantive legal field.
+Community detection is included as exploratory analysis via Louvain over the document-topic-reference graph. Each community can be summarized by the configured LLM using its topic labels and representative document titles, and the graph loader can persist `communityId` and `communitySummary` onto `Document` and `Topic` nodes. It is not treated as the main quality claim because sparse legal citation graphs can cluster by issuer, time, or publication pattern instead of substantive legal field.
 
 Cross-encoder reranking is optional. It can improve precision, but it is slower than bi-encoder retrieval. The intended production optimization path would be async candidate generation, cached graph expansion, batched reranker inference, and quantized reranker weights.
 
@@ -67,12 +67,12 @@ Another important limitation is legal currentness. The graph stores `REPEALS` an
 
 ## Scaling Bottlenecks
 
-The main bottlenecks are crawl time under polite rate limits, Arabic PDF extraction quality, LLM topic extraction cost, embedding throughput, and Neo4j write volume. At larger scale, ingestion should split into independent queues: discovery, fetch, parse, graph upsert, topic extraction, chunking, and embedding. Neo4j writes should be batched, and embeddings should run on GPU workers or a managed embedding service.
+The main bottlenecks are crawl time under polite rate limits, Arabic PDF extraction quality, LLM topic extraction cost, embedding throughput, and Neo4j write volume. At larger scale, ingestion should split into independent queues: discovery, fetch, parse, graph upsert, topic extraction, chunking, and embedding. The current loader batches documents, chunks, topics, legal references, and community assignments; at larger scale those batches should be queue-driven with retryable write jobs. Embeddings should run on GPU workers or a managed embedding service.
 
 The system deliberately avoids CAPTCHA bypass. If throttling or CAPTCHA appears, the crawler checkpoints progress, records the failing URL, and pauses for later resume.
 
 ## Verification
 
-The repository includes offline tests for exact number parsing, English-link extraction, gazette skipping, PDF issuer parsing, Markdown cleanup, chunking, fallback topic detection, and legal edge classification. These tests are useful but intentionally narrow; they do not prove full crawl resumability, Arabic PDF quality, cross-encoder quality, embedding quality, or end-to-end Neo4j correctness under all failure modes.
+The repository includes offline tests for exact number parsing, English-link extraction, gazette skipping, PDF issuer parsing, Markdown cleanup, chunking, crawl-state resume records, fallback topic detection, and legal edge classification. These tests are useful but intentionally narrow; they do not prove Arabic PDF quality, cross-encoder quality, embedding quality, or end-to-end Neo4j correctness under all failure modes.
 
 Live checks performed during development covered the WordPress REST probe, Gemini smoke completion, Neo4j Aura connectivity, schema/index creation, sample graph loading, vector/full-text index availability, and the 67-document retrieval sanity check. Gemini batch topic extraction can hit provider rate limits; when that happens the topic extractor falls back to deterministic taxonomy matching rather than failing the pipeline.

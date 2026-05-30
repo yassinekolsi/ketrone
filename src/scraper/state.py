@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 
 class CrawlState:
@@ -90,10 +90,19 @@ class CrawlState:
         return row["value"] if row else default
 
     def pending_slugs(self) -> Iterable[str]:
+        return [row["slug"] for row in self.pending_records()]
+
+    def pending_records(self, *, max_retries: int = 5) -> list[dict[str, Any]]:
         rows = self.conn.execute(
-            "SELECT slug FROM discovered_posts WHERE status IN ('pending', 'failed') ORDER BY updated_at"
+            """
+            SELECT slug, post_id, source_url, status, retries, is_gazette, english_url, error
+            FROM discovered_posts
+            WHERE status IN ('pending', 'failed') AND retries <= ?
+            ORDER BY updated_at
+            """,
+            (max_retries,),
         ).fetchall()
-        return [row["slug"] for row in rows]
+        return [dict(row) for row in rows]
 
     def close(self) -> None:
         self.conn.close()

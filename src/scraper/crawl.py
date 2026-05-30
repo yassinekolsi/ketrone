@@ -211,14 +211,57 @@ class QanoonCrawler:
         slug = extract_slug_from_url(url)
         if not slug:
             raise ValueError(f"Cannot extract post slug from {url}")
+        return self.post_from_slug(slug)
+
+    def post_from_slug(self, slug: str) -> dict[str, Any]:
         response = self.get(
             settings.qanoon_api_url,
             params={"slug": slug, "_fields": "id,date,modified,slug,link,title,content,categories"},
         )
         posts = response.json()
         if not posts:
-            raise ValueError(f"No REST post found for {url}")
+            raise ValueError(f"No REST post found for slug {slug}")
         return posts[0]
+
+    def post_from_html_url(self, url: str) -> dict[str, Any]:
+        slug = extract_slug_from_url(url)
+        if not slug:
+            raise ValueError(f"Cannot extract post slug from {url}")
+        detail_html = self.fetch_html(url)
+        return {
+            "id": None,
+            "date": None,
+            "modified": None,
+            "slug": slug,
+            "link": url,
+            "title": {"rendered": extract_page_title(detail_html) or slug},
+            "content": {"rendered": extract_article_html(detail_html)},
+            "categories": [],
+        }
+
+    def pending_posts(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        posts: list[dict[str, Any]] = []
+        for record in self.state.pending_records():
+            slug = record["slug"]
+            try:
+                post = self.post_from_slug(slug)
+            except Exception as exc:
+                source_url = record.get("source_url")
+                if not source_url:
+                    self.state.mark_status(slug, "failed", str(exc))
+                    console.print(f"[yellow]pending retry failed:[/] {slug} {exc}")
+                    continue
+                try:
+                    post = self.post_from_html_url(source_url)
+                except Exception as html_exc:
+                    self.state.mark_status(slug, "failed", str(html_exc))
+                    console.print(f"[yellow]pending retry failed:[/] {slug} {html_exc}")
+                    continue
+            posts.append(post)
+            self._checkpoint_post(post)
+            if limit and len(posts) >= limit:
+                break
+        return posts
 
     def discover(self, *, limit: int | None = None, force_sitemap: bool = False) -> list[dict[str, Any]]:
         probes = probe_required_endpoints()
@@ -233,7 +276,7 @@ class QanoonCrawler:
         else:
             for url in self.sitemap_urls(limit=limit):
                 try:
-                    post = self.post_from_url(url)
+                    post = self.post_from_html_url(url)
                 except Exception as exc:
                     console.print(f"[yellow]fallback URL failed:[/] {url} {exc}")
                     continue
@@ -319,7 +362,6 @@ class QanoonCrawler:
                 "pdf_metadata": pdf_meta,
             },
         )
-        self.state.mark_status(slug, "done")
         return document
 
     def write_document(self, document: LegalDocument, *, sample: bool = False) -> None:
@@ -335,20 +377,38 @@ class QanoonCrawler:
         if document.content_en:
             (markdown_dir / f"{document.slug}.en.md").write_text(document.content_en, encoding="utf-8")
 
-    def crawl(self, *, limit: int | None = None, sample: bool = False, force_sitemap: bool = False, pdf_fallback: bool = False) -> int:
+    def crawl(
+        self,
+        *,
+        limit: int | None = None,
+        sample: bool = False,
+        force_sitemap: bool = False,
+        pdf_fallback: bool = False,
+        resume_pending: bool = True,
+    ) -> int:
         count = 0
-        posts = self.discover(limit=limit, force_sitemap=force_sitemap)
+        posts: list[dict[str, Any]] = []
+        if resume_pending:
+            posts.extend(self.pending_posts(limit=limit))
+        remaining = None if limit is None else max(limit - len(posts), 0)
+        if remaining is None or remaining > 0:
+            posts.extend(self.discover(limit=remaining, force_sitemap=force_sitemap))
+        seen_slugs: set[str] = set()
         for post in tqdm(posts, desc="documents"):
+            slug = post.get("slug", "unknown")
+            if slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
             try:
                 document = self.build_document(post, pdf_fallback=pdf_fallback)
             except Exception as exc:
-                slug = post.get("slug", "unknown")
                 self.state.mark_status(slug, "failed", str(exc))
                 console.print(f"[red]failed {slug}:[/] {exc}")
                 continue
             if document is None:
                 continue
             self.write_document(document, sample=sample)
+            self.state.mark_status(document.slug, "done")
             count += 1
         return count
 
@@ -369,10 +429,17 @@ def crawl(
     force_sitemap: bool = typer.Option(False, help="Force sitemap/HTML fallback discovery."),
     pdf_fallback: bool = typer.Option(False, help="Download PDFs when HTML content is too short."),
     browser_fallback: bool = typer.Option(False, help="Use optional Playwright fallback if direct detail-page fetch fails."),
+    resume_pending: bool = typer.Option(True, help="Retry pending/failed slugs from SQLite before discovering new posts."),
 ) -> None:
     crawler = QanoonCrawler(state_path=state_path, output_dir=output_dir, browser_fallback=browser_fallback)
     try:
-        count = crawler.crawl(limit=limit, sample=sample, force_sitemap=force_sitemap, pdf_fallback=pdf_fallback)
+        count = crawler.crawl(
+            limit=limit,
+            sample=sample,
+            force_sitemap=force_sitemap,
+            pdf_fallback=pdf_fallback,
+            resume_pending=resume_pending,
+        )
     finally:
         crawler.close()
     console.print(f"[green]wrote {count} documents[/]")

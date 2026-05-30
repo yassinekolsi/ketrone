@@ -53,14 +53,18 @@ def absolute_url(base: str, href: str | None) -> str | None:
 
 def extract_english_link(content_html: str, base_url: str = "https://qanoon.om") -> str | None:
     soup = BeautifulSoup(content_html or "", "html.parser")
+    decree_links: list[str] = []
     for link in soup.find_all("a", href=True):
         href = absolute_url(base_url, link["href"])
         parsed = urlparse(href or "")
+        if parsed.netloc not in DEGREE_HOSTS:
+            continue
+        decree_links.append(href or "")
         text = link.get_text(" ", strip=True).lower()
         classes = set(link.get("class", []))
-        if parsed.netloc in DEGREE_HOSTS and ("decree-link" in classes or "english" in text):
+        if "decree-link" in classes or "english" in text:
             return href
-    return None
+    return decree_links[0] if decree_links else None
 
 
 def extract_pdf_urls(content_html: str) -> list[str]:

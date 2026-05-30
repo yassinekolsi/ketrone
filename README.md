@@ -62,7 +62,7 @@ python -m src.scraper.crawl crawl --limit 100 --sample
 python -m src.scraper.crawl crawl
 ```
 
-The crawler uses SQLite checkpointing at `data/crawl_state.sqlite3`, randomized pacing, retries with exponential backoff, and resumable WordPress REST pagination.
+The crawler uses SQLite checkpointing at `data/crawl_state.sqlite3`, randomized pacing, retries with exponential backoff, resumable WordPress REST pagination, and replay of pending/failed slugs before new discovery work.
 
 Optional crawler controls are available through `.env`: `CRAWLER_PROXY_URL` for proxy routing and `CRAWLER_COOKIE_JAR` for cookie persistence. The `--browser-fallback` flag can use Playwright for detail-page HTML fallback if Playwright is installed locally.
 
@@ -80,7 +80,8 @@ Generate pipeline artifacts, then load them:
 python -m src.llm_agents.chunking
 python -m src.llm_agents.topic_extractor
 python -m src.vector_ops.embed
-python -m src.ingestion.load_graph
+python -m src.vector_ops.community --output-path data\raw\communities.jsonl --summaries-path data\raw\community_summaries.jsonl
+python -m src.ingestion.load_graph --communities-path data\raw\communities.jsonl
 ```
 
 Run a live Neo4j-backed search:
@@ -118,6 +119,7 @@ When these variables are set, topic extraction and final synthesis use Gemini. I
 - Exact number parsing: primary document numbers are parsed only from the paragraph directly below `h1.entry-title`.
 - Issuer metadata: ministerial issuer codes are parsed from `data.qanoon.om/ar/md/{issuer}/...` PDF paths.
 - Cross-reference edges: `REFERENCES`, `REPEALS`, and `AMENDS` come from inline links plus Arabic legal keywords.
+- Batched graph writes: documents, chunks, topics, legal references, and optional community assignments are written with `UNWIND` batches.
 - Multilingual embeddings: default model is `intfloat/multilingual-e5-small`, with a deterministic hash fallback if model dependencies are unavailable.
 - Search backends: local JSONL retrieval for portable demos and live Neo4j retrieval for graph/vector/full-text queries.
 - Bonus scripts: topic merge audit, optional cross-encoder rerank, and Louvain community detection with LLM-generated community summaries.
@@ -132,6 +134,7 @@ python -m src.llm_agents.topic_extractor --input-path data\sample_output\documen
 python -m src.vector_ops.embed --chunks-path data\sample_output\chunks.jsonl --topics-path data\sample_output\topics.jsonl --output-dir data\sample_output
 python -m src.vector_ops.merge_topics --topics-path data\sample_output\topics.embedded.jsonl --threshold 0.88
 python -m src.vector_ops.community --documents-path data\sample_output\documents.jsonl --topics-path data\sample_output\topics.jsonl --output-path data\sample_output\communities.jsonl --summaries-path data\sample_output\community_summaries.jsonl
+python -m src.ingestion.load_graph --documents-path data\sample_output\documents.jsonl --chunks-path data\sample_output\chunks.embedded.jsonl --topics-path data\sample_output\topics.embedded.jsonl --communities-path data\sample_output\communities.jsonl
 python -m src.evaluation.evaluate_retrieval --data-dir data\sample_output --output-path data\sample_output\retrieval_eval.json
 python src\search_client.py --query "What laws regulate sports entities?" --data-dir data\sample_output
 ```
@@ -142,4 +145,4 @@ python src\search_client.py --query "What laws regulate sports entities?" --data
 python -m pytest
 ```
 
-The tests cover REST-independent parsing behavior: English-link extraction, gazette skipping, exact number-block parsing, PDF issuer parsing, markdown cleanup, chunking, and deterministic cross-reference classification.
+The tests cover REST-independent parsing behavior: English-link extraction, gazette skipping, exact number-block parsing, PDF issuer parsing, markdown cleanup, chunking, crawl-state resume records, and deterministic cross-reference classification.

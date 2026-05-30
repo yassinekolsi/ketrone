@@ -13,6 +13,7 @@ from src.io import read_jsonl
 
 app = typer.Typer(help="Load scraped documents, topics, chunks, and vectors into Neo4j.")
 console = Console()
+LEGAL_RELATIONSHIP_TYPES = {"REFERENCES", "REPEALS", "AMENDS"}
 
 
 class GraphLoader:
@@ -71,28 +72,42 @@ class GraphLoader:
             d.contentAr = row.content_ar,
             d.contentEn = row.content_en
         """
+        cross_reference_edges = []
+        for document in documents:
+            for ref in document.get("cross_references", []):
+                target_slug = ref.get("target_slug")
+                rel_type = ref.get("rel_type", "REFERENCES")
+                if not target_slug or rel_type not in LEGAL_RELATIONSHIP_TYPES:
+                    continue
+                cross_reference_edges.append(
+                    {
+                        "source": document["id"],
+                        "target": target_slug,
+                        "context": ref.get("context"),
+                        "anchorText": ref.get("anchor_text"),
+                        "targetUrl": ref.get("target_url"),
+                        "relType": rel_type,
+                    }
+                )
         with self.session() as session:
             session.run(query, rows=documents)
-            for document in documents:
-                for ref in document.get("cross_references", []):
-                    target_slug = ref.get("target_slug")
-                    rel_type = ref.get("rel_type", "REFERENCES")
-                    if not target_slug or rel_type not in {"REFERENCES", "REPEALS", "AMENDS"}:
-                        continue
-                    session.run(
-                        f"""
-                        MATCH (a:Document {{id: $source}})
-                        MERGE (b:Document {{id: $target}})
-                        ON CREATE SET b.slug = $target
-                        MERGE (a)-[r:{rel_type}]->(b)
-                        SET r.context = $context, r.anchorText = $anchorText, r.targetUrl = $targetUrl
-                        """,
-                        source=document["id"],
-                        target=target_slug,
-                        context=ref.get("context"),
-                        anchorText=ref.get("anchor_text"),
-                        targetUrl=ref.get("target_url"),
-                    )
+            for rel_type in sorted(LEGAL_RELATIONSHIP_TYPES):
+                rows = [edge for edge in cross_reference_edges if edge["relType"] == rel_type]
+                if not rows:
+                    continue
+                session.run(
+                    f"""
+                    UNWIND $rows AS row
+                    MATCH (a:Document {{id: row.source}})
+                    MERGE (b:Document {{id: row.target}})
+                    ON CREATE SET b.slug = row.target
+                    MERGE (a)-[r:{rel_type}]->(b)
+                    SET r.context = row.context,
+                        r.anchorText = row.anchorText,
+                        r.targetUrl = row.targetUrl
+                    """,
+                    rows=rows,
+                )
 
     def load_chunks(self, chunks: list[dict[str, Any]]) -> None:
         query = """
@@ -126,6 +141,42 @@ class GraphLoader:
         with self.session() as session:
             session.run(query, rows=topic_links)
 
+    def load_communities(self, communities: list[dict[str, Any]]) -> None:
+        document_rows = []
+        topic_rows = []
+        for row in communities:
+            node = row.get("node", "")
+            payload = {
+                "communityId": row.get("community_id"),
+                "communitySummary": row.get("community_summary"),
+            }
+            if node.startswith("doc:"):
+                document_rows.append({"id": node.removeprefix("doc:"), **payload})
+            elif node.startswith("topic:"):
+                topic_rows.append({"canonicalName": node.removeprefix("topic:"), **payload})
+
+        with self.session() as session:
+            if document_rows:
+                session.run(
+                    """
+                    UNWIND $rows AS row
+                    MATCH (d:Document {id: row.id})
+                    SET d.communityId = row.communityId,
+                        d.communitySummary = row.communitySummary
+                    """,
+                    rows=document_rows,
+                )
+            if topic_rows:
+                session.run(
+                    """
+                    UNWIND $rows AS row
+                    MATCH (t:Topic {canonicalName: row.canonicalName})
+                    SET t.communityId = row.communityId,
+                        t.communitySummary = row.communitySummary
+                    """,
+                    rows=topic_rows,
+                )
+
 
 def infer_vector_dim(*collections: list[dict[str, Any]]) -> int | None:
     for rows in collections:
@@ -141,11 +192,13 @@ def main(
     documents_path: Path = typer.Option(RAW_DIR / "documents.jsonl"),
     chunks_path: Path = typer.Option(RAW_DIR / "chunks.embedded.jsonl"),
     topics_path: Path = typer.Option(RAW_DIR / "topics.embedded.jsonl"),
+    communities_path: Path | None = typer.Option(None, help="Optional community assignments JSONL from vector_ops.community."),
     setup_only: bool = typer.Option(False, help="Only create constraints/indexes."),
 ) -> None:
     documents = read_jsonl(documents_path)
     chunks = read_jsonl(chunks_path)
     topics = read_jsonl(topics_path)
+    communities = read_jsonl(communities_path) if communities_path else []
     vector_dim = infer_vector_dim(chunks, topics)
     loader = GraphLoader(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password, settings.neo4j_database)
     try:
@@ -159,9 +212,14 @@ def main(
             loader.load_chunks(chunks)
         if topics:
             loader.load_topics(topics)
+        if communities:
+            loader.load_communities(communities)
     finally:
         loader.close()
-    console.print(f"[green]loaded {len(documents)} documents, {len(chunks)} chunks, {len(topics)} topic links[/]")
+    console.print(
+        f"[green]loaded {len(documents)} documents, {len(chunks)} chunks, "
+        f"{len(topics)} topic links, {len(communities)} community assignments[/]"
+    )
 
 
 if __name__ == "__main__":
