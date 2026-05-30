@@ -1,0 +1,141 @@
+{
+  "summary": {
+    "queries": 7.0,
+    "positive_queries": 6.0,
+    "hit_at_1": 1.0,
+    "hit_at_3": 1.0,
+    "mrr": 1.0
+  },
+  "results": [
+    {
+      "query_id": "health_specialties",
+      "query": "Which decree abolished the Higher Institute of Health Specialties?",
+      "expected_document_ids": [
+        "rd2026060"
+      ],
+      "retrieved_document_ids": [
+        "rd2026060",
+        "rd2026059",
+        "rd2026058",
+        "rd2026057"
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "reciprocal_rank": 1.0,
+      "top_score": 1.0,
+      "notes": "Should retrieve Royal Decree 60/2026."
+    },
+    {
+      "query_id": "sports_entities",
+      "query": "What law regulates sports entities and sports clubs?",
+      "expected_document_ids": [
+        "rd2026059"
+      ],
+      "retrieved_document_ids": [
+        "rd2026059",
+        "rd2026060",
+        "rd2026057",
+        "rd2026058",
+        "mjla20260050"
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "reciprocal_rank": 1.0,
+      "top_score": 0.9977958428823406,
+      "notes": "Should retrieve Royal Decree 59/2026 issuing the Sports Entities Law."
+    },
+    {
+      "query_id": "urban_planning",
+      "query": "Which decree issued the Urban Planning Law?",
+      "expected_document_ids": [
+        "rd2026058"
+      ],
+      "retrieved_document_ids": [
+        "rd2026058",
+        "rd2026059",
+        "rd2026060",
+        "rd2026057"
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "reciprocal_rank": 1.0,
+      "top_score": 1.0,
+      "notes": "Should retrieve Royal Decree 58/2026."
+    },
+    {
+      "query_id": "postal_sector",
+      "query": "Which decree concerns the postal sector and postal services?",
+      "expected_document_ids": [
+        "rd2026057"
+      ],
+      "retrieved_document_ids": [
+        "rd2026057",
+        "rd2026059",
+        "rd2026060",
+        "rd2026058"
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "reciprocal_rank": 1.0,
+      "top_score": 1.0,
+      "notes": "Should retrieve Royal Decree 57/2026."
+    },
+    {
+      "query_id": "judicial_enforcement_commerce",
+      "query": "Which ministerial decision gives judicial enforcement status to Ministry of Commerce officers?",
+      "expected_document_ids": [
+        "mjla20260050"
+      ],
+      "retrieved_document_ids": [
+        "mjla20260050",
+        "rd2026057",
+        "rd2026059",
+        "rd2026060",
+        "rd2026058",
+        "education20260104"
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "reciprocal_rank": 1.0,
+      "top_score": 0.68117496605862,
+      "notes": "Should retrieve Ministerial Decision 50/2026."
+    },
+    {
+      "query_id": "university_branch_sur",
+      "query": "Which decision licensed a branch of A'Sharqiya University in Sur?",
+      "expected_document_ids": [
+        "education20260104"
+      ],
+      "retrieved_document_ids": [
+        "education20260104",
+        "rd2026059",
+        "rd2026058",
+        "mjla20260050",
+        "rd2026060",
+        "rd2026057"
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true,
+      "reciprocal_rank": 1.0,
+      "top_score": 0.8496091035615572,
+      "notes": "Should retrieve Ministerial Decision 104/2026."
+    },
+    {
+      "query_id": "adversarial_mars_colony",
+      "query": "Which Omani decree regulates mining colonies on Mars?",
+      "expected_document_ids": [],
+      "retrieved_document_ids": [
+        "rd2026058",
+        "rd2026060",
+        "rd2026059",
+        "rd2026057",
+        "mjla20260050"
+      ],
+      "hit_at_1": false,
+      "hit_at_3": false,
+      "reciprocal_rank": 0.0,
+      "top_score": 0.9699596563482529,
+      "notes": "Negative-control query. A healthy system should report no known expected document."
+    }
+  ]
+}
