@@ -15,6 +15,11 @@ NOISE_SELECTORS = [
     "iframe",
     "svg",
     "form",
+    "header",
+    "footer",
+    "nav",
+    "[role='banner']",
+    "[role='contentinfo']",
     ".sharedaddy",
     ".post-meta",
     ".nav-links",
@@ -83,6 +88,8 @@ def fallback_markdown(cleaned_html: str) -> str:
             cells = [cell.get_text(" ", strip=True) for cell in element.find_all(["th", "td"])]
             if cells:
                 lines.append("| " + " | ".join(cells) + " |")
+                if element.find("th"):
+                    lines.append("| " + " | ".join("---" for _ in cells) + " |")
         else:
             for strong in element.find_all("strong"):
                 strong.string = f"**{strong.get_text(' ', strip=True)}**"

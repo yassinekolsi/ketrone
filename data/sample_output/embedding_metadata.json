@@ -1,0 +1,5 @@
+{
+  "model": "intfloat/multilingual-e5-small",
+  "backend": "sentence_transformer",
+  "dimension": 384
+}

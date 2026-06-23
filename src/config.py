@@ -16,6 +16,13 @@ SAMPLE_DIR = DATA_DIR / "sample_output"
 STATE_DB = DATA_DIR / "crawl_state.sqlite3"
 
 
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     qanoon_api_url: str = "https://qanoon.om/wp-json/wp/v2/posts"
@@ -32,6 +39,12 @@ class Settings:
     google_model: str = os.getenv("GOOGLE_MODEL") or os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
     reranker_model: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
+    search_backend: str = os.getenv("SEARCH_BACKEND", "local").strip().lower()
+    search_data_dir: Path = Path(os.getenv("SEARCH_DATA_DIR", str(SAMPLE_DIR)))
+    search_top_k: int = int(os.getenv("SEARCH_TOP_K", "50"))
+    search_top_n: int = int(os.getenv("SEARCH_TOP_N", "5"))
+    search_dense_weight: float = float(os.getenv("SEARCH_DENSE_WEIGHT", "0.35"))
+    search_rerank: bool = env_bool("SEARCH_RERANK", True)
     user_agent: str = (
         "Mozilla/5.0 (compatible; OmanLegalGraphRAG/1.0; "
         "+https://github.com/example/legal-graphrag-pipeline)"

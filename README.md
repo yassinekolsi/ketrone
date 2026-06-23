@@ -36,6 +36,8 @@ python -m src.vector_ops.embed --chunks-path data\sample_output\chunks.jsonl --t
 python src\search_client.py --query "What decrees govern health specialties?" --data-dir data\sample_output --top-k 10 --top-n 3
 ```
 
+Cross-encoder reranking is part of this default command. Use `--no-rerank` only for an ablation or a constrained demo environment.
+
 The search client supports two backends:
 
 - `--backend local` reads the JSONL artifacts from disk for quick offline demos.
@@ -50,10 +52,18 @@ python -m src.scraper.crawl crawl --limit 80 --output-dir data\eval_output --sta
 python -m src.llm_agents.chunking --input-path data\eval_output\documents.jsonl --output-path data\eval_output\chunks.jsonl
 python -m src.llm_agents.topic_extractor --input-path data\eval_output\documents.jsonl --output-path data\eval_output\topics.jsonl
 python -m src.vector_ops.embed --chunks-path data\eval_output\chunks.jsonl --topics-path data\eval_output\topics.jsonl --output-dir data\eval_output
-python -m src.evaluation.evaluate_retrieval --data-dir data\eval_output --output-path data\eval_output\retrieval_eval.json --top-k 20 --dense-weight 0.35
+python -m src.evaluation.evaluate_retrieval --data-dir data\eval_output --output-path data\eval_output\retrieval_eval.json --top-k 20 --metric-k 3 --dense-weight 0.35
 ```
 
-Latest local evaluation: 80 posts inspected, 67 full documents written, 247 chunks generated, and six known-answer positive queries reached H@1/H@3. This is still a sanity check, not a scientific benchmark. The negative-control query intentionally shows that the current client ranks nearest candidates even when the correct answer should be “not found”; production use needs a calibrated rejection threshold.
+Latest local evaluation: 80 posts inspected, 67 full documents written, 247 chunks generated, and six known-answer positive queries. The committed evaluator measures every stage over the same candidate depth and records whether the cross-encoder actually ran:
+
+| Stage | P@3 | R@3 | H@1 | H@3 | MRR | Reranker executed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dense only | 0.222 | 0.667 | 0.667 | 0.667 | 0.699 | 0/6 |
+| Hybrid + graph context | 0.333 | 1.000 | 1.000 | 1.000 | 1.000 | 0/6 |
+| Hybrid + graph context + rerank | 0.333 | 1.000 | 1.000 | 1.000 | 1.000 | 6/6 |
+
+The hybrid stage lifts recall and MRR substantially. Reranking preserves the ceiling on this small/easy label set rather than producing a fabricated extra gain; a larger hard-query set is needed to measure its incremental benefit. The negative-control query also shows that production use still needs a calibrated rejection threshold.
 
 Full crawl:
 
@@ -100,6 +110,26 @@ Override with `.env` values from `.env.example`.
 
 For Neo4j Aura, use the Aura-provided `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, and `NEO4J_DATABASE`. If local Windows/Python certificate validation fails while the host is otherwise reachable, `neo4j+ssc://...` can be used as a local diagnostic workaround; keep `neo4j+s://...` for normal trusted environments.
 
+## FastAPI And Render
+
+Run the same search pipeline over HTTP:
+
+```powershell
+uvicorn src.api:app --reload
+Invoke-RestMethod http://127.0.0.1:8000/search -Method Post -ContentType application/json -Body '{"query":"Which decree abolished the Higher Institute of Health Specialties?","top_n":3}'
+```
+
+Endpoints:
+
+- `POST /search` runs hybrid candidate generation, graph expansion, cross-encoder reranking by default, and final synthesis.
+- `GET /health` is the cheap liveness URL for Render and UptimeRobot.
+- `GET /ready` checks the configured local or Aura search backend.
+- `GET /docs` exposes Swagger UI.
+
+`render.yaml` contains the build/start commands and non-secret defaults. Create a Render Blueprint from the repository, then provide `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, and `GOOGLE_API_KEY` in Render. Point UptimeRobot at `https://<service>.onrender.com/health`; use `/ready` for backend-aware monitoring.
+
+The configured E5 model plus BGE cross-encoder is not a 512 MB workload. A free instance is useful for testing deployment wiring but can run out of memory on its first real search; choose an instance with roughly 2 GB or more for the default three-stage pipeline. UptimeRobot can detect outages and generate traffic, but it cannot guarantee zero downtime or add memory to the service.
+
 ## Gemini
 
 The LLM client supports Google Gemini directly through the Generative Language REST API:
@@ -122,7 +152,7 @@ When these variables are set, topic extraction and final synthesis use Gemini. I
 - Batched graph writes: documents, chunks, topics, legal references, and optional community assignments are written with `UNWIND` batches.
 - Multilingual embeddings: default model is `intfloat/multilingual-e5-small`, with a deterministic hash fallback if model dependencies are unavailable.
 - Search backends: local JSONL retrieval for portable demos and live Neo4j retrieval for graph/vector/full-text queries.
-- Bonus scripts: topic merge audit, optional cross-encoder rerank, and Louvain community detection with LLM-generated community summaries.
+- Bonus features: topic merge audit, default cross-encoder reranking, and Louvain community detection with LLM-generated community summaries.
 
 ## Key Commands
 
@@ -145,4 +175,4 @@ python src\search_client.py --query "What laws regulate sports entities?" --data
 python -m pytest
 ```
 
-The tests cover REST-independent parsing behavior: English-link extraction, gazette skipping, exact number-block parsing, PDF issuer parsing, markdown cleanup, chunking, crawl-state resume records, and deterministic cross-reference classification.
+The tests cover English-link extraction, gazette skipping, exact number-block parsing, PDF issuer parsing, header/footer removal, Markdown table preservation, chunking, crawl-state resume records, UA rotation, exponential-backoff configuration, default reranking, API behavior, and deterministic cross-reference classification.

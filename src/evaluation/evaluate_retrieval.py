@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -9,10 +9,11 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from src.search_client import LocalHybridSearch
+from src.io import read_jsonl
+from src.search_client import LocalHybridSearch, dedupe_by_document
 
 
-app = typer.Typer(help="Evaluate hybrid retrieval against labeled known-answer queries.")
+app = typer.Typer(help="Evaluate dense, hybrid+graph, and reranked retrieval stages.")
 console = Console(highlight=False)
 
 
@@ -57,35 +58,33 @@ DEFAULT_QUERIES = [
         "id": "adversarial_mars_colony",
         "query": "Which Omani decree regulates mining colonies on Mars?",
         "expected_document_ids": [],
-        "notes": "Negative-control query. A healthy system should report no known expected document.",
+        "notes": "Negative control; excluded from positive-query aggregate metrics.",
     },
 ]
+
+STAGE_DENSE = "dense_only"
+STAGE_GRAPH = "hybrid_graph"
+STAGE_RERANK = "hybrid_graph_rerank"
 
 
 @dataclass
 class EvalResult:
+    stage: str
     query_id: str
     query: str
     expected_document_ids: list[str]
     retrieved_document_ids: list[str]
+    precision_at_k: float
+    recall_at_k: float
+    reciprocal_rank: float
     hit_at_1: bool
     hit_at_3: bool
-    reciprocal_rank: float
     top_score: float
+    rerank_applied: bool
     notes: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "query_id": self.query_id,
-            "query": self.query,
-            "expected_document_ids": self.expected_document_ids,
-            "retrieved_document_ids": self.retrieved_document_ids,
-            "hit_at_1": self.hit_at_1,
-            "hit_at_3": self.hit_at_3,
-            "reciprocal_rank": self.reciprocal_rank,
-            "top_score": self.top_score,
-            "notes": self.notes,
-        }
+        return asdict(self)
 
 
 def load_queries(path: Path | None) -> list[dict[str, Any]]:
@@ -94,71 +93,119 @@ def load_queries(path: Path | None) -> list[dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def evaluate(data_dir: Path, queries: list[dict[str, Any]], *, top_k: int = 10, dense_weight: float = 0.35) -> list[EvalResult]:
+def document_ids(candidates: list[dict[str, Any]]) -> list[str]:
+    return [candidate["chunk"]["document_id"] for candidate in dedupe_by_document(candidates)]
+
+
+def score_result(
+    *,
+    stage: str,
+    item: dict[str, Any],
+    expected: list[str],
+    candidates: list[dict[str, Any]],
+    metric_k: int,
+) -> EvalResult:
+    retrieved = document_ids(candidates)
+    relevant_at_k = len(set(retrieved[:metric_k]) & set(expected))
+    rank = next((index for index, doc_id in enumerate(retrieved, start=1) if doc_id in expected), 0)
+    return EvalResult(
+        stage=stage,
+        query_id=item["id"],
+        query=item["query"],
+        expected_document_ids=expected,
+        retrieved_document_ids=retrieved,
+        precision_at_k=(relevant_at_k / metric_k) if expected else 0.0,
+        recall_at_k=(relevant_at_k / len(expected)) if expected else 0.0,
+        reciprocal_rank=(1.0 / rank) if rank else 0.0,
+        hit_at_1=rank == 1,
+        hit_at_3=0 < rank <= 3,
+        top_score=float(candidates[0]["score"]) if candidates else 0.0,
+        rerank_applied=any(candidate.get("rerank_applied") is True for candidate in candidates),
+        notes=item.get("notes", ""),
+    )
+
+
+def evaluate(
+    data_dir: Path,
+    queries: list[dict[str, Any]],
+    *,
+    top_k: int = 20,
+    metric_k: int = 3,
+    dense_weight: float = 0.35,
+    run_reranker: bool = True,
+) -> list[EvalResult]:
     searcher = LocalHybridSearch(data_dir)
-    results: list[EvalResult] = []
     available_docs = set(searcher.documents)
+    results: list[EvalResult] = []
     for item in queries:
         expected = [doc_id for doc_id in item.get("expected_document_ids", []) if doc_id in available_docs]
-        candidates = searcher.search(item["query"], k=top_k, dense_weight=dense_weight)
-        retrieved = []
-        for candidate in candidates:
-            doc_id = candidate["chunk"]["document_id"]
-            if doc_id not in retrieved:
-                retrieved.append(doc_id)
-        rank = 0
-        for index, doc_id in enumerate(retrieved, start=1):
-            if doc_id in expected:
-                rank = index
-                break
-        results.append(
-            EvalResult(
-                query_id=item["id"],
-                query=item["query"],
-                expected_document_ids=expected,
-                retrieved_document_ids=retrieved[:top_k],
-                hit_at_1=rank == 1,
-                hit_at_3=0 < rank <= 3,
-                reciprocal_rank=(1.0 / rank) if rank else 0.0,
-                top_score=float(candidates[0]["score"]) if candidates else 0.0,
-                notes=item.get("notes", ""),
-            )
+        dense_candidates = searcher.search_dense(item["query"], k=top_k)
+        graph_candidates = searcher.search(item["query"], k=top_k, dense_weight=dense_weight)
+        reranked_candidates = (
+            searcher.rerank(item["query"], [dict(candidate) for candidate in graph_candidates], top_n=top_k)
+            if run_reranker
+            else [dict(candidate) for candidate in graph_candidates]
         )
+        for stage, candidates in [
+            (STAGE_DENSE, dense_candidates),
+            (STAGE_GRAPH, graph_candidates),
+            (STAGE_RERANK, reranked_candidates),
+        ]:
+            results.append(
+                score_result(
+                    stage=stage,
+                    item=item,
+                    expected=expected,
+                    candidates=candidates,
+                    metric_k=metric_k,
+                )
+            )
     return results
 
 
-def summarize(results: list[EvalResult]) -> dict[str, float]:
-    positive = [result for result in results if result.expected_document_ids]
-    if not positive:
-        return {"queries": float(len(results)), "hit_at_1": 0.0, "hit_at_3": 0.0, "mrr": 0.0}
-    return {
-        "queries": float(len(results)),
-        "positive_queries": float(len(positive)),
-        "hit_at_1": sum(result.hit_at_1 for result in positive) / len(positive),
-        "hit_at_3": sum(result.hit_at_3 for result in positive) / len(positive),
-        "mrr": sum(result.reciprocal_rank for result in positive) / len(positive),
-    }
+def summarize(results: list[EvalResult], *, metric_k: int = 3) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    stages = [STAGE_DENSE, STAGE_GRAPH, STAGE_RERANK]
+    for stage in stages:
+        stage_results = [result for result in results if result.stage == stage]
+        positives = [result for result in stage_results if result.expected_document_ids]
+        divisor = len(positives) or 1
+        summaries.append(
+            {
+                "stage": stage,
+                "queries": len(stage_results),
+                "positive_queries": len(positives),
+                f"precision_at_{metric_k}": sum(result.precision_at_k for result in positives) / divisor,
+                f"recall_at_{metric_k}": sum(result.recall_at_k for result in positives) / divisor,
+                "hit_at_1": sum(result.hit_at_1 for result in positives) / divisor,
+                "hit_at_3": sum(result.hit_at_3 for result in positives) / divisor,
+                "mrr": sum(result.reciprocal_rank for result in positives) / divisor,
+                "rerank_applied_queries": sum(result.rerank_applied for result in positives),
+            }
+        )
+    return summaries
 
 
-def render(results: list[EvalResult], summary: dict[str, float]) -> None:
-    table = Table(title="Retrieval Evaluation")
-    table.add_column("Query")
-    table.add_column("Expected")
-    table.add_column("Top Docs")
+def render(summaries: list[dict[str, Any]], *, metric_k: int) -> None:
+    table = Table(title="Staged Retrieval Evaluation")
+    table.add_column("Stage")
+    table.add_column(f"P@{metric_k}")
+    table.add_column(f"R@{metric_k}")
     table.add_column("H@1")
     table.add_column("H@3")
-    table.add_column("RR")
-    for result in results:
+    table.add_column("MRR")
+    table.add_column("Reranked")
+    for summary in summaries:
         table.add_row(
-            result.query_id,
-            ", ".join(result.expected_document_ids) or "(none)",
-            ", ".join(result.retrieved_document_ids[:3]) or "(none)",
-            "yes" if result.hit_at_1 else "no",
-            "yes" if result.hit_at_3 else "no",
-            f"{result.reciprocal_rank:.2f}",
+            summary["stage"],
+            f"{summary[f'precision_at_{metric_k}']:.3f}",
+            f"{summary[f'recall_at_{metric_k}']:.3f}",
+            f"{summary['hit_at_1']:.3f}",
+            f"{summary['hit_at_3']:.3f}",
+            f"{summary['mrr']:.3f}",
+            f"{summary['rerank_applied_queries']}/{summary['positive_queries']}",
         )
     console.print(table)
-    console.print({key: round(value, 3) for key, value in summary.items()})
 
 
 @app.command()
@@ -166,18 +213,32 @@ def main(
     data_dir: Path = typer.Option(..., help="Directory containing documents/chunks/topics JSONL."),
     queries_path: Path | None = typer.Option(None, help="Optional JSON file of labeled queries."),
     output_path: Path | None = typer.Option(None, help="Write JSON evaluation results."),
-    top_k: int = typer.Option(10, help="Candidate depth to evaluate."),
-    dense_weight: float = typer.Option(0.35, help="Hybrid score weight for dense similarity; remainder is BM25."),
+    top_k: int = typer.Option(20, help="Candidate depth to evaluate."),
+    metric_k: int = typer.Option(3, help="Cutoff used for precision and recall."),
+    dense_weight: float = typer.Option(0.35, help="Dense weight in the hybrid candidate stage."),
+    rerank: bool = typer.Option(True, "--rerank/--no-rerank", help="Run the cross-encoder stage."),
 ) -> None:
     queries = load_queries(queries_path)
-    results = evaluate(data_dir, queries, top_k=top_k, dense_weight=dense_weight)
-    summary = summarize(results)
-    render(results, summary)
+    results = evaluate(
+        data_dir,
+        queries,
+        top_k=top_k,
+        metric_k=metric_k,
+        dense_weight=dense_weight,
+        run_reranker=rerank,
+    )
+    summaries = summarize(results, metric_k=metric_k)
+    render(summaries, metric_k=metric_k)
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
             json.dumps(
-                {"summary": summary, "results": [result.to_dict() for result in results]},
+                {
+                    "dataset": {"documents": len(read_jsonl(data_dir / "documents.jsonl")), "queries": len(queries)},
+                    "metric_k": metric_k,
+                    "stages": summaries,
+                    "results": [result.to_dict() for result in results],
+                },
                 ensure_ascii=False,
                 indent=2,
             ),

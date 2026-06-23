@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -14,8 +15,15 @@ app = typer.Typer(help="Generate multilingual embeddings for chunks and topics."
 console = Console()
 
 
-def embed_rows(rows: list[dict], *, text_key: str, kind: str, batch_size: int = 32) -> list[dict]:
-    embedder = Embedder(settings.embedding_model)
+def embed_rows(
+    rows: list[dict],
+    *,
+    text_key: str,
+    kind: str,
+    batch_size: int = 32,
+    embedder: Embedder | None = None,
+) -> list[dict]:
+    embedder = embedder or Embedder(settings.embedding_model)
     output: list[dict] = []
     for start in range(0, len(rows), batch_size):
         batch = rows[start : start + batch_size]
@@ -37,17 +45,38 @@ def main(
 ) -> None:
     chunks = read_jsonl(chunks_path)
     topics = read_jsonl(topics_path)
+    embedder = Embedder(settings.embedding_model)
     if chunks:
-        embedded_chunks = embed_rows(chunks, text_key="text", kind="passage", batch_size=batch_size)
+        embedded_chunks = embed_rows(chunks, text_key="text", kind="passage", batch_size=batch_size, embedder=embedder)
         write_jsonl(output_dir / "chunks.embedded.jsonl", embedded_chunks)
         console.print(f"[green]embedded {len(embedded_chunks)} chunks[/]")
     if topics:
         topic_rows = [dict(row, topic_text=row.get("canonical_name") or row.get("name") or "") for row in topics]
-        embedded_topics = embed_rows(topic_rows, text_key="topic_text", kind="passage", batch_size=batch_size)
+        embedded_topics = embed_rows(
+            topic_rows,
+            text_key="topic_text",
+            kind="passage",
+            batch_size=batch_size,
+            embedder=embedder,
+        )
         for row in embedded_topics:
             row.pop("topic_text", None)
         write_jsonl(output_dir / "topics.embedded.jsonl", embedded_topics)
         console.print(f"[green]embedded {len(embedded_topics)} topic links[/]")
+    if chunks or topics:
+        dimension = len((embedded_chunks if chunks else embedded_topics)[0]["embedding"])
+        (output_dir / "embedding_metadata.json").write_text(
+            json.dumps(
+                {
+                    "model": embedder.model_name,
+                    "backend": embedder.backend,
+                    "dimension": dimension,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":

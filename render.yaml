@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: oman-legal-graphrag-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SEARCH_BACKEND
+        value: neo4j
+      - key: SEARCH_TOP_K
+        value: "50"
+      - key: SEARCH_TOP_N
+        value: "5"
+      - key: SEARCH_DENSE_WEIGHT
+        value: "0.35"
+      - key: SEARCH_RERANK
+        value: "true"
+      - key: NEO4J_URI
+        sync: false
+      - key: NEO4J_USERNAME
+        sync: false
+      - key: NEO4J_PASSWORD
+        sync: false
+      - key: NEO4J_DATABASE
+        value: neo4j
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GOOGLE_MODEL
+        value: gemini-3.1-flash-lite
+      - key: EMBEDDING_MODEL
+        value: intfloat/multilingual-e5-small
+      - key: RERANKER_MODEL
+        value: BAAI/bge-reranker-base

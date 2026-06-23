@@ -3,13 +3,17 @@ from __future__ import annotations
 import hashlib
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from src.config import settings
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+# Sentence Transformers is used through PyTorch here. Explicitly disabling its
+# optional TensorFlow/Flax imports avoids Keras-version conflicts on API hosts.
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_FLAX", "0")
 
 
 def normalize(vector: np.ndarray) -> np.ndarray:
@@ -23,13 +27,19 @@ def normalize(vector: np.ndarray) -> np.ndarray:
 class Embedder:
     model_name: str = settings.embedding_model
     fallback_dim: int = 384
+    force_fallback: bool = False
+    backend: str = field(init=False)
 
     def __post_init__(self) -> None:
         self._model = None
+        self.backend = "deterministic_hash"
+        if self.force_fallback:
+            return
         try:
             from sentence_transformers import SentenceTransformer
 
             self._model = SentenceTransformer(self.model_name)
+            self.backend = "sentence_transformer"
         except Exception:
             self._model = None
 

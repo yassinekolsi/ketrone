@@ -10,6 +10,21 @@ def test_markdown_conversion_strips_scripts_and_keeps_headings() -> None:
     assert "**Text**" in markdown
 
 
+def test_markdown_conversion_strips_layout_chrome_and_keeps_tables() -> None:
+    html = """
+    <header>Site navigation</header>
+    <article>
+      <table><tr><th>Ministry</th><th>Decision</th></tr><tr><td>Health</td><td>60/2026</td></tr></table>
+    </article>
+    <footer>Copyright</footer>
+    """
+    markdown = html_to_markdown(html)
+    assert "Site navigation" not in markdown
+    assert "Copyright" not in markdown
+    assert "| Ministry | Decision |" in markdown
+    assert "| Health | 60/2026 |" in markdown
+
+
 def test_chunk_document_uses_language_specific_content() -> None:
     document = {
         "id": "rd2026060",

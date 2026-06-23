@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 if __package__ in {None, ""}:
@@ -27,6 +31,8 @@ from src.vector_ops.embeddings import Embedder, cosine_similarity
 
 app = typer.Typer(help="Hybrid GraphRAG search client.")
 console = Console(highlight=False)
+_RERANKER_LOCK = Lock()
+_EMBEDDER_LOCK = Lock()
 TOKEN_RE = re.compile(r"\w+|[\u0600-\u06FF]+", re.UNICODE)
 STOPWORDS = {
     "a",
@@ -77,6 +83,22 @@ def normalize_score_map(scores: dict[str, float]) -> dict[str, float]:
     return {key: float((value - min_score) / (max_score - min_score)) for key, value in scores.items()}
 
 
+@lru_cache(maxsize=2)
+def load_reranker(model_name: str):
+    """Load one reusable cross-encoder per model instead of once per query."""
+    from sentence_transformers import CrossEncoder
+
+    return CrossEncoder(model_name)
+
+
+@dataclass
+class SearchPipelineResult:
+    candidates: list[dict[str, Any]]
+    answer: str
+    rerank_requested: bool
+    rerank_applied: bool
+
+
 class LocalHybridSearch:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
@@ -86,7 +108,18 @@ class LocalHybridSearch:
         self.topics_by_doc: dict[str, list[dict]] = defaultdict(list)
         for topic in self.topics:
             self.topics_by_doc[topic["document_id"]].append(topic)
-        self.embedder = Embedder()
+        metadata_path = data_dir / "embedding_metadata.json"
+        embedding_metadata: dict[str, Any] = {}
+        if metadata_path.exists():
+            try:
+                embedding_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                embedding_metadata = {}
+        self.embedder = Embedder(
+            model_name=str(embedding_metadata.get("model") or settings.embedding_model),
+            fallback_dim=int(embedding_metadata.get("dimension") or 384),
+            force_fallback=embedding_metadata.get("backend") == "deterministic_hash",
+        )
         self.bm25 = BM25Okapi([tokenize(self.index_text(chunk)) for chunk in self.chunks]) if self.chunks else None
 
     def index_text(self, chunk: dict[str, Any]) -> str:
@@ -152,9 +185,30 @@ class LocalHybridSearch:
             candidates.append(
                 {
                     "chunk": chunk,
+                    "document": self.documents.get(chunk["document_id"], {}),
                     "score": score,
                     "dense_score": dense_score,
                     "bm25_score": sparse_score,
+                    "expanded_text": self.expand_candidate(chunk),
+                }
+            )
+        return sorted(candidates, key=lambda item: item["score"], reverse=True)[:k]
+
+    def search_dense(self, query: str, *, k: int = 50) -> list[dict[str, Any]]:
+        """Dense-only baseline used by the staged retrieval evaluation."""
+        dense = self.normalize_scores(self.dense_scores(query))
+        candidates: list[dict[str, Any]] = []
+        for index, chunk in enumerate(self.chunks):
+            score = dense[index] if index < len(dense) else 0.0
+            if score <= 0:
+                continue
+            candidates.append(
+                {
+                    "chunk": chunk,
+                    "document": self.documents.get(chunk["document_id"], {}),
+                    "score": score,
+                    "dense_score": score,
+                    "bm25_score": 0.0,
                     "expanded_text": self.expand_candidate(chunk),
                 }
             )
@@ -183,16 +237,23 @@ class LocalHybridSearch:
 
     def rerank(self, query: str, candidates: list[dict[str, Any]], *, top_n: int) -> list[dict[str, Any]]:
         try:
-            from sentence_transformers import CrossEncoder
-
-            model = CrossEncoder("BAAI/bge-reranker-base")
             pairs = [(query, candidate["expanded_text"]) for candidate in candidates]
-            scores = model.predict(pairs)
+            if not pairs:
+                return []
+            # Torch model inference is serialized so concurrent API requests do not
+            # race model loading or oversubscribe a small deployment instance.
+            with _RERANKER_LOCK:
+                model = load_reranker(settings.reranker_model)
+                scores = model.predict(pairs, show_progress_bar=False)
             for candidate, score in zip(candidates, scores):
                 candidate["rerank_score"] = float(score)
+                candidate["rerank_applied"] = True
             return sorted(candidates, key=lambda item: item["rerank_score"], reverse=True)[:top_n]
         except Exception as exc:
             console.print(f"[yellow]reranker unavailable, using hybrid scores:[/] {exc}")
+            for candidate in candidates:
+                candidate["rerank_score"] = None
+                candidate["rerank_applied"] = False
             return candidates[:top_n]
 
     def synthesize(self, query: str, candidates: list[dict[str, Any]]) -> str:
@@ -239,10 +300,21 @@ class Neo4jHybridSearch:
             notifications_min_severity="OFF",
         )
         self.database = settings.neo4j_database
-        self.embedder = Embedder()
+        self._embedder: Embedder | None = None
+
+    @property
+    def embedder(self) -> Embedder:
+        if self._embedder is None:
+            with _EMBEDDER_LOCK:
+                if self._embedder is None:
+                    self._embedder = Embedder()
+        return self._embedder
 
     def close(self) -> None:
         self.driver.close()
+
+    def verify_connectivity(self) -> None:
+        self.driver.verify_connectivity()
 
     def session(self):
         return self.driver.session(database=self.database) if self.database else self.driver.session()
@@ -430,6 +502,7 @@ def render_matches(candidates: list[dict[str, Any]]) -> None:
     table.add_column("Score")
     table.add_column("Dense")
     table.add_column("BM25")
+    table.add_column("Rerank")
     table.add_column("Document")
     table.add_column("Topics")
     for index, candidate in enumerate(candidates, start=1):
@@ -446,6 +519,7 @@ def render_matches(candidates: list[dict[str, Any]]) -> None:
             f"{candidate['score']:.3f}",
             f"{candidate['dense_score']:.3f}",
             f"{candidate['bm25_score']:.3f}",
+            f"{candidate['rerank_score']:.3f}" if candidate.get("rerank_score") is not None else "-",
             doc_id,
             topic_line[:60],
         )
@@ -464,6 +538,54 @@ def dedupe_by_document(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
     return unique
 
 
+def create_searcher(
+    backend: str,
+    *,
+    data_dir: Path = RAW_DIR,
+    allow_self_signed: bool = False,
+) -> Any:
+    if backend == "neo4j":
+        return Neo4jHybridSearch(allow_self_signed=allow_self_signed)
+    if backend != "local":
+        raise ValueError("backend must be 'local' or 'neo4j'")
+    if not (data_dir / "documents.jsonl").exists() and (SAMPLE_DIR / "documents.jsonl").exists():
+        data_dir = SAMPLE_DIR
+    return LocalHybridSearch(data_dir)
+
+
+def run_search_pipeline(
+    searcher: Any,
+    query_text: str,
+    *,
+    top_k: int = 50,
+    top_n: int = 5,
+    dense_weight: float = 0.35,
+    rerank: bool = True,
+) -> SearchPipelineResult:
+    """Run the canonical hybrid -> graph expansion -> rerank -> synthesis flow."""
+    if not query_text.strip():
+        raise ValueError("query must not be empty")
+    if top_k < 1 or top_n < 1:
+        raise ValueError("top_k and top_n must be positive")
+    if top_n > top_k:
+        raise ValueError("top_n must be less than or equal to top_k")
+    if not 0.0 <= dense_weight <= 1.0:
+        raise ValueError("dense_weight must be between 0 and 1")
+
+    candidates = searcher.search(query_text, k=top_k, dense_weight=dense_weight)
+    if rerank:
+        # Rerank the full candidate pool before document deduplication. Otherwise,
+        # several chunks from one document can consume all final result slots.
+        candidates = searcher.rerank(query_text, candidates, top_n=top_k)
+    candidates = dedupe_by_document(candidates)[:top_n]
+    return SearchPipelineResult(
+        candidates=candidates,
+        answer=searcher.synthesize(query_text, candidates),
+        rerank_requested=rerank,
+        rerank_applied=rerank and any(candidate.get("rerank_applied") is True for candidate in candidates),
+    )
+
+
 @app.command()
 def query(
     query_text: str = typer.Option(..., "--query", "-q", help="User legal search query."),
@@ -471,30 +593,26 @@ def query(
     backend: str = typer.Option("local", help="Search backend: local or neo4j."),
     top_k: int = typer.Option(50, help="Candidate generation size."),
     top_n: int = typer.Option(5, help="Final contexts to synthesize."),
-    rerank: bool = typer.Option(False, help="Enable local cross-encoder reranking."),
+    rerank: bool = typer.Option(True, "--rerank/--no-rerank", help="Run cross-encoder reranking (enabled by default)."),
     dense_weight: float = typer.Option(0.35, help="Hybrid score weight for dense similarity; remainder is BM25."),
     allow_self_signed: bool = typer.Option(False, help="Use neo4j+ssc when NEO4J_URI is neo4j+s and local cert validation fails."),
 ) -> None:
-    if backend not in {"local", "neo4j"}:
-        raise typer.BadParameter("backend must be 'local' or 'neo4j'")
-    searcher: Any
-    if backend == "neo4j":
-        searcher = Neo4jHybridSearch(allow_self_signed=allow_self_signed)
-    else:
-        if not (data_dir / "documents.jsonl").exists() and (SAMPLE_DIR / "documents.jsonl").exists():
-            data_dir = SAMPLE_DIR
-        searcher = LocalHybridSearch(data_dir)
     try:
-        candidates = searcher.search(query_text, k=top_k, dense_weight=dense_weight)
-        if rerank:
-            candidates = searcher.rerank(query_text, candidates, top_n=top_n)
-            candidates = dedupe_by_document(candidates)
-        else:
-            candidates = dedupe_by_document(candidates)
-        candidates = candidates[:top_n]
-        render_matches(candidates)
+        searcher = create_searcher(backend, data_dir=data_dir, allow_self_signed=allow_self_signed)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    try:
+        result = run_search_pipeline(
+            searcher,
+            query_text,
+            top_k=top_k,
+            top_n=top_n,
+            dense_weight=dense_weight,
+            rerank=rerank,
+        )
+        render_matches(result.candidates)
         console.rule("Graph Context + Final Answer")
-        console.print(searcher.synthesize(query_text, candidates), markup=False, highlight=False)
+        console.print(result.answer, markup=False, highlight=False)
     finally:
         close = getattr(searcher, "close", None)
         if close:
